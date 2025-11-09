@@ -1,0 +1,7 @@
+{
+  "bcc": 0,
+  "benign": 1,
+  "infectious": 2,
+  "inflammatory": 3,
+  "melanoma": 4
+}

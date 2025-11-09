@@ -1,0 +1,19 @@
+[project]
+requires-python = ">=3.11,<3.14"
+name = "mlops-skin-decease"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+dependencies = [
+    "boto3>=1.40.69",
+    "fastapi>=0.121.1",
+    "minio>=7.2.18",
+    "mlflow>=3.6.0",
+    "numpy<2.0.0",
+    "pillow>=12.0.0",
+    "streamlit>=1.51.0",
+    "tensorflow>=2.18.1",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+    "uvicorn>=0.38.0",
+]
