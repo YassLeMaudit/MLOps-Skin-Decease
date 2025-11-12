@@ -3,6 +3,6 @@
   "img_width": 224,
   "color_mode": "rgb",
   "preprocess": "tf.keras.applications.efficientnet.preprocess_input",
-  "class_index_path": "/kaggle/working/runs/skin5-current/data/class_index.json",
-  "created_utc": 1762694749
+  "class_index_path": "/home/yass/MLOps-Skin-Decease/runs/skin5-current/data/class_index.json",
+  "created_utc": 1762908014
 }

@@ -1,0 +1,130 @@
+==============================
+Projet : MLOps Skin Disease
+==============================
+
+Objectif général
+----------------
+Concevoir une plateforme MLOps de bout en bout pour la détection de maladies de la peau : ingestion fiable, entraînement traçable, livraison continue d’un modèle TensorFlow servit via API, supervision opérationnelle et pipeline CI/CD reproductible.
+
+Jeu de données & prétraitement
+------------------------------
+- Dataset Kaggle “skin disease lesions”, organisé en `data/raw/train|val/<label>/*.jpg`.
+- Labels : bcc, benign, infectious, inflammatory, melanoma.
+- `src/data/dataset_config.yaml` centralise les chemins, le bucket MinIO cible et le fichier SQLite utilisé pour l’indexation.
+- Chaque image est hashée (SHA-256) pour éviter les doublons, les métadonnées sont stockées dans `data/metadata/skin_metadata.db`, et les images sont poussées dans `s3://skin-processed/skin/<split>/<label>/...`.
+
+Architecture globale
+--------------------
+1. **Stockage & artefacts**
+   - MinIO : buckets `skin-raw`, `skin-processed`, `mlflow`, `models-registry`.
+   - MLflow (Postgres backend + MinIO artefacts) : tracking des runs, centralisation des modèles.
+2. **Computing & orchestration**
+   - Airflow (CeleryExecutor) : trois services (webserver, scheduler, worker) + Postgres + Redis.
+   - DAGs principaux :
+     - `ingest_dataset_to_minio` (cron `@daily`) pour synchroniser local -> MinIO.
+     - `train_model_pipeline` (cron `@weekly`) : ingestion incrémentale, entraînement, export MLflow.
+3. **Serving & UI**
+   - FastAPI (port 8000) : endpoints `/health`, `/predict`, `/metrics`.
+   - Streamlit (port 8501) : UI pour téléverser une image, consulter le Top-K et afficher les alertes d’incertitude.
+4. **Observabilité**
+   - Prometheus + Grafana : instrumentation Airflow, API et webapp.
+5. **CI/CD**
+   - GitHub Actions `.github/workflows/ci.yml` : tests automatiques + build/push d’images Docker.
+
+Pipeline détaillé
+-----------------
+### 1. Ingestion
+- Script `src/data/ingest_dataset.py`.
+- Étapes : scan des splits, filtrage des extensions supportées, calcul du hash, création des clés S3, upload via boto3 (MinIO), écriture dans SQLite et dans la table `lesions_data`.
+- Mode `--dry-run` pour simplement rafraîchir la base locale sans recharger MinIO.
+- DAG Airflow `ingest_dataset_to_minio` encapsule `_ingest()` et se déclenche quotidiennement (démo : activer dans l’UI Airflow et lancer un run manuel).
+
+### 2. Entraînement (TensorFlow + MLflow)
+- Script `src/training/train.py`.
+- Fonctionnement :
+  1. Lit la configuration, vérifie que les métadonnées sont présentes.
+  2. Télécharge les fichiers manquants depuis MinIO (cache local dans `.cache/dataset`).
+  3. Construit un pipeline `tf.data` (préprocessing + augmentation légère).
+  4. Modèle : EfficientNetB0 pré-entraîné, fine-tuning des couches supérieures, dropout 0.3.
+  5. Callbacks : `EarlyStopping`, sauvegarde du meilleur modèle, `MLflowLoggingCallback` pour loguer accuracy/loss/val_accuracy/val_loss à chaque epoch.
+  6. Export final : `runs/skin5-current/` + upload vers `s3://models-registry/skin/models/<run_id>/`.
+- Hyperparamètres pouvant être surchargés via CLI ou Airflow conf (epochs, batch_size, learning_rate).
+
+### 3. Serving & expérience utilisateur
+- **FastAPI**
+  - Chargement du modèle Keras (.keras + fallback sur les poids).
+  - Prétraitement : redimensionnement, `EfficientNet.preprocess_input`, inference batch=1.
+  - Réponse : `{"label": "...", "probs": [...], "classes": [...]}`.
+  - Expose `/metrics` (Prometheus) avec instrumentations : `api_requests_total`, `api_request_duration_seconds`, `api_predictions_total{label}`, `api_prediction_confidence{label}`.
+  - Permet l’intégration future d’A/B testing ou de modèles alternatifs (hook MLflow).
+- **Streamlit**
+  - Formulaire d’upload (JPEG/PNG) + slider d’incertitude + top-K configurable.
+  - Intègre un exporter Prometheus (port 9100) pour mesurer l’usage (page views, uploads, latency côté client).
+  - Affiche un warning si `best_prob < threshold` pour favoriser la revue médicale.
+
+### 4. Monitoring
+- Prometheus scrape interval 15s :
+  - `airflow-webserver:8080/admin/metrics` → statut DAG/task, latence scheduler.
+  - `api:8000/metrics` → trafic API, top labels, temps de réponse.
+  - `webapp:9100/metrics` → interactions utilisateur et latence front→API.
+  - `prometheus:9090` → health interne.
+- Grafana :
+  - Datasource préconfigurée.
+  - Dashboard “Airflow Overview” (CPU/Mem/up).
+  - Possibilité d’ajouter un dashboard API/Webapp montrant `api_request_duration_seconds`, `api_predictions_total`, `webapp_prediction_latency_seconds`, etc.
+
+### 5. CI/CD (GitHub Actions)
+- Job `tests` : Python 3.12 → `pip install -e .` → `pytest`.
+- Job `docker-build` : Docker Buildx, build des images API & webapp. Si secrets Docker Hub présents et push sur `main`, push automatique taggé par commit SHA.
+- Déclenchement : push, pull_request sur `main`, ou `workflow_dispatch`.
+- Étapes futures possibles : rajouter un job `docker-compose run tests` ou un déploiement (Kubernetes, ECS…).
+
+Commandes & URLs clés
+---------------------
+- Démarrer la plateforme complète :
+
+  ```
+  docker compose up -d \
+    minio minio-mc mlflow-db mlflow \
+    api webapp \
+    airflow-db redis airflow-init airflow-webserver airflow-scheduler airflow-worker \
+    prometheus grafana
+  ```
+
+- Interfaces :
+  - FastAPI : http://localhost:8000/docs
+  - Streamlit : http://localhost:8501
+  - MLflow : http://localhost:5000
+  - MinIO console : http://localhost:9001
+  - Airflow : http://localhost:8080 (admin/admin)
+  - Prometheus : http://localhost:9090
+  - Grafana : http://localhost:3000 (admin/admin)
+- CLI Airflow pour overrider les hyperparamètres :
+  ```
+  airflow dags trigger train_model_pipeline --conf '{"epochs": 10, "batch_size": 32, "learning_rate": 5e-4}'
+  ```
+
+Déroulé de présentation conseillé
+---------------------------------
+1. **Architecture** : slide montrant la topologie Docker (MinIO, MLflow, Airflow, API, Webapp, Monitoring, CI/CD).
+2. **Ingestion** : expliquer la chaîne (config YAML → script → SQLite + S3), montrer la table `lesions_data`.
+3. **Airflow** : afficher les deux DAGs, lancer `train_model_pipeline`, parcourir les logs.
+4. **MLflow** : ouvrir l’expérience “skin-disease-lesions-training”, montrer métriques/artefacts.
+5. **FastAPI + Streamlit** : démo en live (upload, top-K, alerte incertitude).
+6. **Monitoring** : Grafana (dashboard Airflow + panel sur `api_request_duration_seconds`), Prometheus Targets.
+7. **CI/CD** : écran GitHub Actions, expliquer les étapes + conditions de push Docker.
+8. **Plan d’amélioration** : promotion automatique de modèle, packaging Airflow custom, déploiement cloud.
+
+Risques & points d’attention
+-----------------------------
+- Airflow installe des dépendances lourdes à chaque reboot (prévoir build custom si déploiement long terme).
+- TensorFlow pousse des warnings GPU (inoffensifs en mode CPU).
+- Les buckets MinIO doivent être créés via `minio-mc` (déjà automatisé dans Compose).
+- Configurer les secrets Docker Hub avant d’activer le push CI.
+
+Pistes d’amélioration
+---------------------
+- Ajouter un DAG de “model promotion” (validation, comparaison des runs, mise à jour d’un alias).
+- Construire des images Docker Airflow custom pour réduire le temps de bootstrap.
+- Enrichir Grafana avec un dashboard dédié FastAPI/Streamlit (panels pour trafic, prédictions par label, latence UI).
+- Déploiement orchestré (Helm chart, Terraform) pour un passage cloud.

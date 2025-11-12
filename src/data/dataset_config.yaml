@@ -1,0 +1,23 @@
+dataset:
+  name: skin-disease-lesions
+  description: >
+    Training/validation splits for the Kaggle skin disease dataset already
+    downloaded under data/raw. Each split stores one folder per label.
+  labels:
+    - bcc
+    - benign
+    - infectious
+    - inflammatory
+    - melanoma
+  splits:
+    train:
+      root: data/raw/train
+    val:
+      root: data/raw/val
+
+s3:
+  bucket_env: S3_SKIN_PROCESSED_BUCKET
+  prefix: skin
+
+metadata:
+  sqlite_path: data/metadata/skin_metadata.db

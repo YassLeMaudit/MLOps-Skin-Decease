@@ -1,0 +1,36 @@
+Etape 1 - Environnement local
+------------------------------
+- Ajout d'un `.env` complet : chemins des artefacts, ports API/webapp, identifiants MinIO/MLflow, variables Airflow (Fernet, broker Redis, Postgres, etc.).
+- Creation d'un docker-compose (`compose.yaml`) qui instancie MinIO + MC (init buckets), MLflow + Postgres, API FastAPI (hot reload), webapp Streamlit, Redis, base Airflow, ainsi que webserver/scheduler/worker.
+- Dockerfiles dedies pour l'API et la webapp : installation via `uv.lock` pour reproduire les deps et copier `src/` + `runs/`.
+- Script `docker/minio/create-buckets.sh` pour initialiser les buckets des le lancement.
+- Tests de fumee `tests/test_dev_env.py` afin de s'assurer que les dossiers cles existent, que `.env` expose toutes les variables critiques et que le compose inclut tous les services attendus.
+- README mis a jour pour expliquer comment demarrer `docker compose up`, quels endpoints sont exposes et comment lancer les tests.
+
+Etape 2 - Ingestion & pretraitement
+-----------------------------------
+- Structuration du dataset Kaggle dans `data/raw/train|val/<label>/`. Un fichier `src/data/dataset_config.yaml` decrit les splits, les cinq labels, le bucket MinIO de destination et l'emplacement de la base SQLite de suivi.
+- Developpement du module `src/data/ingest_dataset.py` :
+  * Lecture de la config YAML et resolution du bucket via les variables `.env`.
+  * Decouverte des images (extensions jpg/png) par split/label, calcul du SHA-256, generation du nom d'objet S3 `skin/<split>/<label>/...`.
+  * Connexion a MinIO via boto3 (reuse des credentials) et insertion des metadonnees dans `data/metadata/skin_metadata.db` (`lesions_data(url_source, s3_uri, label, split, sha256, bytes)`).
+  * CLI `python -m src.data.ingest_dataset --config ... --splits train val --dry-run` pour piloter l'ingestion manuellement.
+- Ajout du DAG `airflow/dags/ingestion_dag.py` qui appelle `run_ingestion` (schedule `@daily`) afin de synchroniser automatiquement les nouvelles images vers MinIO.
+- Nouveaux tests `tests/test_ingestion.py` pour valider la resolution du bucket via l'environnement, la decouverte des fichiers et l'ecriture en base + l'appel au client S3 (mocke).
+- README enrichi avec la marche a suivre pour l'etape 2 (structure du dataset, commande d'ingestion, declenchement du DAG, nouvelle batterie de tests).
+
+Etape 3 - Entrainement + MLflow
+--------------------------------
+- Nouveau script `src/training/train.py` : lit la base SQLite `skin_metadata.db`, reconstruit les listes d'images par split, gere le telechargement depuis MinIO dans un cache local si besoin, puis cree le pipeline `tf.data` + EfficientNetB0 (backbone givre, tete Dense). Support GPU automatique via TensorFlow.
+- Tracking : configuration MLflow via `.env`, log des hyperparametres, metriques (accuracy, F1 macro) et artefacts (classement des labels, signature inference, modele Keras). Le modele est egalement depose dans le bucket `S3_MODELS_BUCKET` sous `skin/models/<run_id>/model.keras`.
+- Export local : `runs/skin5-current/` rafraichi avec `class_index.json`, `signature.json`, `model.keras` pour l'API/webapp.
+- Nouveau module `src/training/data_utils.py` pour isoler la lecture SQLite/S3 et permettre des tests unitaires.
+- Tests `tests/test_training_data_utils.py` verifient la lecture des enregistrements et le fallback S3 (mock du telechargement). README mis a jour avec les commandes d'entrainement et la nouvelle batterie de tests.
+
+Etape 4 - Webapp Streamlit
+--------------------------
+- Creation d'une veritable interface Streamlit (`src/webapp/app_streamlit.py`) : upload d'image, parametre Top-K, seuil d'incertitude, appel de l'API FastAPI via le client maison.
+- Client HTTP `src/webapp/client.py` : gere les appels POST /predict, uniformise les erreurs et expose une fonction `top_k_predictions` (reutilisee dans l'app et testable).
+- `.env` et `docker compose` mettent a disposition `API_BASE_URL` (`localhost` en local, `http://api:8000` dans Docker) pour que la webapp fonctionne dans les deux contextes.
+- Dockerfile/app est deja cable pour lancer Streamlit; aucun changement dans la commande Compose hors ajout de l'env var.
+- Tests `tests/test_webapp_client.py` couvrent le tri Top-K et les erreurs API (mock requests). README documente la procedure pour lancer Streamlit ainsi que la nouvelle batterie de tests.

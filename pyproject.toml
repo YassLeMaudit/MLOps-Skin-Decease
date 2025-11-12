@@ -1,8 +1,12 @@
+[build-system]
+requires = ["setuptools>=69.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 requires-python = ">=3.11,<3.14"
 name = "mlops-skin-decease"
 version = "0.1.0"
-description = "Add your description here"
+description = "Skin disease ML pipeline with tracking, serving, and automation."
 readme = "README.md"
 dependencies = [
     "boto3>=1.40.69",
@@ -11,9 +15,19 @@ dependencies = [
     "mlflow>=3.6.0",
     "numpy<2.0.0",
     "pillow>=12.0.0",
+    "python-multipart>=0.0.20",
+    "scikit-learn>=1.5.2",
+    "pyyaml>=6.0.2",
+    "prometheus-client>=0.20.0",
     "streamlit>=1.51.0",
     "tensorflow>=2.18.1",
     "torch>=2.9.0",
     "torchvision>=0.24.0",
     "uvicorn>=0.38.0",
+    "requests>=2.32.3",
+    "pytest>=8.3.3",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = {find = {where = ["src"]}}
